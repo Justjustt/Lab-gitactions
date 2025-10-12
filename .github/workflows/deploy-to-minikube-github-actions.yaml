@@ -3,60 +3,42 @@ name: Deploy to Minikube using GitHub Actions
 on: [push]
 
 jobs:
-  job1:
+  deploy:
     runs-on: ubuntu-latest
-    env:
-      DIAGNOSTICS: false
-    name: build Node.js Docker Image and deploy to minikube
+    name: Build Node.js Docker Image and Deploy to Minikube
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Start minikube
-      uses: medyagh/setup-minikube@v1
-      with:
-        start: true
-        wait: all
-        minikube-version: latest
+      - name: Setup Minikube
+        uses: medyagh/setup-minikube@latest
 
-    - name: Try the cluster !
-      run: kubectl get pods -A
+      - name: Verify cluster connectivity
+        run: kubectl get pods -A
 
-    - name: Build image (tagged with commit SHA)
-      run: |
-        export SHELL=/bin/bash
-        eval $(minikube -p minikube docker-env)
-        IMAGE=devopshint/node-app:${{ github.sha }}
-        docker build -f ./Dockerfile -t $IMAGE .
-        echo -n "verifying images:"
-        docker images | sed -n '1,20p'
-      shell: bash
+      - name: Build Docker image
+        run: |
+          export SHELL=/bin/bash
+          eval $(minikube -p minikube docker-env)
+          IMAGE_TAG=${{ github.sha }}
+          docker build -f ./Dockerfile -t devopshint/node-app:${IMAGE_TAG} .
+          echo "Built image devopshint/node-app:${IMAGE_TAG}"
+          echo -n "Verifying images:"
+          docker images
 
-    - name: Deploy manifest (create resources)
-      run: |
-        kubectl apply -f k8s-node-app.yaml
+      - name: Deploy to Minikube
+        run: |
+          IMAGE_TAG=${{ github.sha }}
+          sed "s|devopshint/node-app:latest|devopshint/node-app:${IMAGE_TAG}|g" k8s-node-app.yaml | kubectl apply -f -
 
-    - name: Set deployment image to the commit-tagged image
-      run: |
-        IMAGE=devopshint/node-app:${{ github.sha }}
-        kubectl set image deployment/nodejs-app nodejs-app=$IMAGE
-        kubectl rollout status deployment/nodejs-app --timeout=180s
+      - name: Wait for deployment to be ready
+        run: |
+          kubectl rollout status deployment/nodejs-app --timeout=180s
 
-    - name: Wait for deployment to be ready & show pods
-      run: |
-        kubectl get pods -o wide
+      - name: Diagnostic info (optional)
+        run: kubectl get pods -o wide || true
 
-    - name: Test service URLs
-      run: |
-        minikube service list
-        minikube service nodejs-app --url
-
-    - name: Optional diagnostics (runs only when DIAGNOSTICS=true)
-      if: env.DIAGNOSTICS == 'true'
-      run: |
-        echo "== pods (wide) =="
-        kubectl get pods -o wide --show-labels
-        echo "== describe pods =="
-        kubectl describe pods -l app=nodejs-app
-        echo "== describe deployment =="
-        kubectl describe deploy nodejs-app
+      - name: Test service URLs
+        run: |
+          minikube service list
+          minikube service nodejs-app --url
